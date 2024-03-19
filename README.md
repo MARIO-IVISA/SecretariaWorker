@@ -3,19 +3,16 @@
 ## Tags
 `.net-8` `rabbitmq` `worker-service` `ddd` `cadastro` `matrículas`
 
-Este é um Worker Service desenvolvido em .NET 8 utilizando a arquitetura de Domínio Orientado a DDD (Domain-Driven Design). O serviço recebe o cadastro de matrículas através do RabbitMQ, realiza a validação para verificar se o aluno está matriculado no curso e, em seguida, efetua o cadastro.
+Este é um Worker Service desenvolvido em .NET 8 que utiliza o Azure Service Bus. O serviço recebe os dados do aluno e do curso por meio do Azure Service Bus, realiza a validação para verificar o status do aluno e, em seguida, efetua o envio de e-mail.
 
 ## Funcionamento
 
-1. O serviço está configurado para escutar as mensagens na fila RabbitMQ específica para o cadastro de matrículas.
+1. O serviço está configurado para escutar as mensagens na fila específica do Azure Service Bus para o envio de e-mail.
 
-2. Quando uma nova mensagem é recebida, o serviço processa a matrícula, verificando se o aluno está devidamente matriculado no curso.
-
-3. Se a matrícula for válida, o serviço a cadastra.
+2. Quando uma nova mensagem é recebida, o serviço processa o e-mail e o envia conforme o status do aluno: matriculado, aprovado ou reprovado.
 
 ## Tecnologias Utilizadas
 
 - .NET 8
-- RabbitMQ
+- Azure Service Bus
 - Worker Service
-- DDD (Domain-Driven Design)
