@@ -1,78 +1,101 @@
-using Microsoft.Extensions.Hosting;
-using Microsoft.Extensions.Logging;
+using Azure.Messaging.ServiceBus;
+using Microsoft.Azure.ServiceBus;
 using Newtonsoft.Json;
 using RabbitMQ.Client;
 using RabbitMQ.Client.Events;
-using Secretaria.Api.Settings;
-using Secretaria.Application.Contracts;
-using Secretaria.Application.Models;
-using System;
+using Secretaria.Core.Enums;
+using Secretaria.WorkerService.Interfaces;
+using Secretaria.WorkerService.Models;
+using Secretaria.WorkerService.Services;
 using System.Text;
-using System.Threading;
-using System.Threading.Tasks;
 
 namespace Secretaria.WorkerService
 {
     public class Worker : BackgroundService
     {
         private readonly ILogger<Worker> _logger;
-        private readonly IMatriculaApplicationService _matriculaAppService;
-        private IConnection _rabbitMQConnection;
-        private IModel _channel;
-
-        public Worker(ILogger<Worker> logger, IMatriculaApplicationService matriculaAppService)
+        private IQueueClient _queueClient;
+        private readonly ServiceBusClient _clientCreateNoticia;
+        private readonly IEmailService _emailService;
+        public Worker(ILogger<Worker> logger, IEmailService emailService)
         {
             _logger = logger;
-            _matriculaAppService = matriculaAppService;
+            _clientCreateNoticia = new ServiceBusClient(AppSettings.AppSettings.ConnectionStringsMensageria);
+            var servico = new ServiceCollection();
+            _emailService = emailService;
         }
 
         protected override async Task ExecuteAsync(CancellationToken stoppingToken)
         {
-            var factory = new ConnectionFactory
+            while (!stoppingToken.IsCancellationRequested)
             {
-                Uri = new Uri(AppSettings.ConnectionStringsMensageria)
-            };
+                _logger.LogInformation("Worker iniciado: {time}", DateTimeOffset.Now);
 
-            _rabbitMQConnection = factory.CreateConnection();
-            _channel = _rabbitMQConnection.CreateModel();
+                await RegisterOnMessageHandlerAndReceiveMessages(stoppingToken);
 
-            _channel.QueueDeclare(queue: AppSettings.NomeFila, durable: false, exclusive: false, autoDelete: false, arguments: null);
-            var consumer = new EventingBasicConsumer(_channel);
-            consumer.Received += async (sender, ea) =>
+                await Task.Delay(1000, stoppingToken);
+            }
+            _logger.LogInformation("Worker encerrado.");
+        }
+
+        private async Task RegisterOnMessageHandlerAndReceiveMessages(CancellationToken cancellationToken)
+        {
+            var receiveNews = _clientCreateNoticia.CreateReceiver(AppSettings.AppSettings.NomeFila);
+            while (!cancellationToken.IsCancellationRequested)
             {
-                var body = ea.Body.ToArray();
-                var message = Encoding.UTF8.GetString(body);
+                var messageCreateNewsTask = receiveNews.ReceiveMessageAsync();
 
-                _logger.LogInformation($"Mensagem recebida: {message}");
+                await Task.WhenAny(messageCreateNewsTask);
 
-                var matricula = JsonConvert.DeserializeObject<MatriculaCadastroModel>(message);
+                if (cancellationToken.IsCancellationRequested)
+                {
+                    break;
+                }
+                if (messageCreateNewsTask.IsCompletedSuccessfully)
+                {
+                    var messageCreateNews = messageCreateNewsTask.Result;
+                    if (messageCreateNews != null)
+                    {
+                        await ProcessCreateMember(receiveNews, messageCreateNews);
+                    }
+                }
+            }
+        }
+        private async Task ProcessCreateMember(ServiceBusReceiver receiver, ServiceBusReceivedMessage message)
+        {
+            try
+            {
+                await receiver.CompleteMessageAsync(message);
+                var messageString = Encoding.UTF8.GetString(message.Body);
+                var matricula = JsonConvert.DeserializeObject<AlunoModel>(messageString);
 
                 if (matricula != null)
                 {
-                    await _matriculaAppService.Inserir(matricula);
+                    if (matricula.StatusAprovacao == StatusAprovacao.Pendente)
+                    {
+                        _emailService.Matricula(matricula);
+                    }
+                    else if (matricula.StatusAprovacao == StatusAprovacao.Aprovado)
+                    {
+                        _emailService.Aprovado(matricula);
+                    }
+                    else if (matricula.StatusAprovacao == StatusAprovacao.Reprovado)
+                    {
+                        _emailService.ReAprovado(matricula);
+                    }
                     _logger.LogInformation($"Mensagem processada: {message}");
                 }
                 else
                 {
-                    _logger.LogWarning($"Erro ao processar matrícula: Mensagem inválida.");
+                    _logger.LogInformation($"Erro ao cadastrar matricula!");
                 }
-            };
-
-            _channel.BasicConsume(queue: AppSettings.NomeFila, autoAck: true, consumer: consumer);
-
-            while (!stoppingToken.IsCancellationRequested)
-            {
-                await Task.Delay(1000, stoppingToken);
             }
-
-            _logger.LogInformation("Worker encerrado.");
+            catch (MessageLockLostException ex)
+            {
+                _logger.LogError($"O bloqueio da mensagem foi perdido: {ex.Message}");
+            }
         }
 
-        public override async Task StopAsync(CancellationToken cancellationToken)
-        {
-            _rabbitMQConnection.Close();
-            _channel.Close();
-            await base.StopAsync(cancellationToken);
-        }
     }
 }
+

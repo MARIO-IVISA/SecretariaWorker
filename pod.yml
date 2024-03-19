@@ -1,0 +1,23 @@
+apiVersion: v1
+kind: Pod
+metadata:
+  name: workerpod
+spec:
+  containers:
+    - name: workerpod
+      image: duarte3108/secretariaworker05
+
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: workerpod-service
+spec:
+  selector:
+    app: workerpod
+  ports:
+    - protocol: TCP
+      port: 80
+      targetPort: 80
+
+
